@@ -1,8 +1,8 @@
 {
   "name": "gemini",
-  "command": "gemini",
+  "command": "agy",
   "additional_args": [
-    "--yolo"
+    "--dangerously-skip-permissions"
   ],
   "env": {},
   "roles": {
