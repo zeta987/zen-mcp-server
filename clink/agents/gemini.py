@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
-from clink.models import ResolvedCLIClient
+from clink.models import ResolvedCLIClient, ResolvedCLIRole
 from clink.parsers.base import ParsedCLIResponse
 
 from .base import AgentOutput, BaseCLIAgent
@@ -16,6 +17,17 @@ class GeminiAgent(BaseCLIAgent):
 
     def __init__(self, client: ResolvedCLIClient):
         super().__init__(client)
+
+    def _build_command(self, *, role: ResolvedCLIRole, system_prompt: str | None) -> list[str]:
+        _ = system_prompt
+        executable_profile = Path(self.client.executable[0]).stem.lower()
+        if executable_profile == "agy":
+            command = list(self.client.executable)
+            command.extend(self.client.config_args)
+            command.extend(self.client.internal_args)
+            command.extend(role.role_args)
+            return command
+        return super()._build_command(role=role, system_prompt=system_prompt)
 
     def _recover_from_error(
         self,

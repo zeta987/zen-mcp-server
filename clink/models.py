@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PositiveInt, field_validator
 
@@ -47,6 +47,8 @@ class CLIClientConfig(BaseModel):
     command: str | None = None
     working_dir: str | None = None
     additional_args: list[str] = Field(default_factory=list)
+    execution_mode: Literal["pipe", "conpty"] | None = Field(default=None)
+    strip_ansi: bool | None = Field(default=None)
     env: dict[str, str] = Field(default_factory=dict)
     timeout_seconds: PositiveInt | None = Field(default=None)
     roles: dict[str, CLIRoleConfig] = Field(default_factory=dict)
@@ -85,6 +87,8 @@ class ResolvedCLIClient(BaseModel):
     timeout_seconds: int
     parser: str
     runner: str | None = None
+    execution_mode: Literal["pipe", "conpty"] = "pipe"
+    strip_ansi: bool = False
     roles: dict[str, ResolvedCLIRole]
     output_to_file: OutputCaptureConfig | None = None
 

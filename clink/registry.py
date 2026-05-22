@@ -136,18 +136,23 @@ class ClinkRegistry:
 
         executable = self._resolve_executable(raw, internal_defaults, source_path)
 
-        internal_args = list(internal_defaults.additional_args) if internal_defaults else []
+        executable_profile = self._executable_profile_name(executable)
+        internal_args = self._resolve_internal_args(internal_defaults, executable_profile)
         config_args = list(raw.additional_args)
 
         timeout_seconds = raw.timeout_seconds or (
             internal_defaults.timeout_seconds if internal_defaults else DEFAULT_TIMEOUT_SECONDS
         )
 
-        parser_name = internal_defaults.parser
+        parser_name = self._resolve_parser(internal_defaults, executable_profile)
         if not parser_name:
             raise RegistryLoadError(
                 f"CLI '{raw.name}' must define a parser either in configuration or internal defaults"
             )
+        execution_mode = raw.execution_mode or self._resolve_execution_mode(internal_defaults, executable_profile)
+        strip_ansi = raw.strip_ansi
+        if strip_ansi is None:
+            strip_ansi = self._resolve_strip_ansi(internal_defaults, executable_profile)
 
         runner_name = internal_defaults.runner if internal_defaults else None
 
@@ -166,6 +171,8 @@ class ClinkRegistry:
             timeout_seconds=int(timeout_seconds),
             parser=parser_name,
             runner=runner_name,
+            execution_mode=execution_mode,
+            strip_ansi=strip_ansi,
             roles=roles,
             output_to_file=output_to_file,
             working_dir=working_dir,
@@ -181,6 +188,54 @@ class ClinkRegistry:
         if not command:
             raise RegistryLoadError(f"CLI '{raw.name}' must specify a 'command' in configuration")
         return shlex.split(command)
+
+    def _executable_profile_name(self, executable: list[str]) -> str:
+        if not executable:
+            return ""
+        executable_name = Path(executable[0]).name.lower()
+        return Path(executable_name).stem
+
+    def _resolve_internal_args(
+        self,
+        internal_defaults: CLIInternalDefaults | None,
+        executable_profile: str,
+    ) -> list[str]:
+        if internal_defaults is None:
+            return []
+        profile_args = internal_defaults.additional_args_by_executable.get(executable_profile)
+        if profile_args is not None:
+            return list(profile_args)
+        return list(internal_defaults.additional_args)
+
+    def _resolve_parser(
+        self,
+        internal_defaults: CLIInternalDefaults | None,
+        executable_profile: str,
+    ) -> str:
+        if internal_defaults is None:
+            return ""
+        return internal_defaults.parser_by_executable.get(executable_profile, internal_defaults.parser)
+
+    def _resolve_execution_mode(
+        self,
+        internal_defaults: CLIInternalDefaults | None,
+        executable_profile: str,
+    ) -> str:
+        if internal_defaults is None:
+            return "pipe"
+        return internal_defaults.execution_mode_by_executable.get(
+            executable_profile,
+            internal_defaults.execution_mode,
+        )
+
+    def _resolve_strip_ansi(
+        self,
+        internal_defaults: CLIInternalDefaults | None,
+        executable_profile: str,
+    ) -> bool:
+        if internal_defaults is None:
+            return False
+        return internal_defaults.strip_ansi_by_executable.get(executable_profile, internal_defaults.strip_ansi)
 
     def _merge_env(
         self,

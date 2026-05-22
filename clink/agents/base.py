@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import shlex
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Sequence
@@ -16,6 +18,7 @@ from pathlib import Path
 from clink.constants import DEFAULT_STREAM_LIMIT
 from clink.models import ResolvedCLIClient, ResolvedCLIRole
 from clink.parsers import BaseParser, ParsedCLIResponse, ParserError, get_parser
+from clink.parsers.plain_text import strip_terminal_control_sequences
 
 logger = logging.getLogger("clink.agent")
 
@@ -107,36 +110,51 @@ class BaseCLIAgent:
         if cwd:
             self._logger.debug("Working directory: %s", cwd)
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command_with_output_flag,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                limit=limit,
-                env=env,
-            )
-        except FileNotFoundError as exc:
-            raise CLIAgentError(f"Executable not found for CLI '{self.client.name}': {exc}") from exc
+        if self.client.execution_mode == "conpty":
+            try:
+                return_code, stdout_text, stderr_text = await self._run_conpty_command(
+                    command_with_output_flag,
+                    prompt,
+                    cwd,
+                    env,
+                )
+            except TimeoutError as exc:
+                raise CLIAgentError(
+                    f"CLI '{self.client.name}' timed out after {self.client.timeout_seconds} seconds",
+                    returncode=None,
+                ) from exc
+            duration = time.monotonic() - start_time
+        else:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command_with_output_flag,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    limit=limit,
+                    env=env,
+                )
+            except FileNotFoundError as exc:
+                raise CLIAgentError(f"Executable not found for CLI '{self.client.name}': {exc}") from exc
 
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(prompt.encode("utf-8")),
-                timeout=self.client.timeout_seconds,
-            )
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.communicate()
-            raise CLIAgentError(
-                f"CLI '{self.client.name}' timed out after {self.client.timeout_seconds} seconds",
-                returncode=None,
-            ) from exc
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(prompt.encode("utf-8")),
+                    timeout=self.client.timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                process.kill()
+                await process.communicate()
+                raise CLIAgentError(
+                    f"CLI '{self.client.name}' timed out after {self.client.timeout_seconds} seconds",
+                    returncode=None,
+                ) from exc
 
-        duration = time.monotonic() - start_time
-        return_code = process.returncode
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+            duration = time.monotonic() - start_time
+            return_code = process.returncode
+            stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+            stderr_text = stderr_bytes.decode("utf-8", errors="replace")
 
         if output_file_path and output_file_path.exists():
             output_file_content = output_file_path.read_text(encoding="utf-8", errors="replace")
@@ -148,6 +166,10 @@ class BaseCLIAgent:
 
             if output_file_content and not stdout_text.strip():
                 stdout_text = output_file_content
+
+        if self.client.strip_ansi:
+            stdout_text = strip_terminal_control_sequences(stdout_text)
+            stderr_text = strip_terminal_control_sequences(stderr_text)
 
         if return_code != 0:
             recovered = self._recover_from_error(
@@ -202,6 +224,67 @@ class BaseCLIAgent:
         env = os.environ.copy()
         env.update(self.client.env)
         return env
+
+    async def _run_conpty_command(
+        self,
+        command: list[str],
+        prompt: str,
+        cwd: str | None,
+        env: dict[str, str],
+    ) -> tuple[int, str, str]:
+        if sys.platform != "win32":
+            raise CLIAgentError(
+                f"CLI '{self.client.name}' requires Windows ConPTY execution, but this platform is {sys.platform}."
+            )
+
+        try:
+            winpty_module = importlib.import_module("winpty")
+        except ImportError as exc:
+            raise CLIAgentError(
+                "CLI execution mode 'conpty' requires pywinpty on Windows. "
+                "Install pywinpty or use a CLI that supports PIPE stdout."
+            ) from exc
+
+        argv = [*command, prompt]
+        pty = await asyncio.to_thread(
+            winpty_module.PtyProcess.spawn,
+            argv,
+            cwd=cwd,
+            env=env,
+            dimensions=(24, 120),
+        )
+        chunks: list[str] = []
+        deadline = time.monotonic() + self.client.timeout_seconds
+
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    try:
+                        pty.terminate(force=True)
+                    finally:
+                        raise TimeoutError
+                try:
+                    chunk = await asyncio.wait_for(asyncio.to_thread(pty.read, 4096), timeout=remaining)
+                except asyncio.TimeoutError as exc:
+                    try:
+                        pty.terminate(force=True)
+                    finally:
+                        raise TimeoutError from exc
+                except EOFError:
+                    break
+                if chunk:
+                    chunks.append(chunk)
+                    continue
+                if not await asyncio.to_thread(pty.isalive):
+                    break
+
+            returncode = await asyncio.to_thread(pty.wait)
+        finally:
+            if await asyncio.to_thread(pty.isalive):
+                pty.terminate(force=True)
+
+        return int(returncode or 0), "".join(chunks), ""
 
     # ------------------------------------------------------------------
     # Error recovery hooks

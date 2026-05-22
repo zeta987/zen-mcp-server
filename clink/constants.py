@@ -20,6 +20,12 @@ class CLIInternalDefaults:
 
     parser: str
     additional_args: list[str] = field(default_factory=list)
+    parser_by_executable: dict[str, str] = field(default_factory=dict)
+    additional_args_by_executable: dict[str, list[str]] = field(default_factory=dict)
+    execution_mode: str = "pipe"
+    execution_mode_by_executable: dict[str, str] = field(default_factory=dict)
+    strip_ansi: bool = False
+    strip_ansi_by_executable: dict[str, bool] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     default_role_prompt: str | None = None
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
@@ -30,6 +36,10 @@ INTERNAL_DEFAULTS: dict[str, CLIInternalDefaults] = {
     "gemini": CLIInternalDefaults(
         parser="gemini_json",
         additional_args=["-o", "json"],
+        parser_by_executable={"agy": "plain_text"},
+        additional_args_by_executable={"agy": ["--print"]},
+        execution_mode_by_executable={"agy": "conpty"},
+        strip_ansi_by_executable={"agy": True},
         default_role_prompt="systemprompts/clink/default.txt",
         runner="gemini",
     ),

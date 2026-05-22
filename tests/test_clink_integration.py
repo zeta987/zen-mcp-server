@@ -4,20 +4,24 @@ import shutil
 
 import pytest
 
+from clink import get_registry
 from tools.clink import CLinkTool
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_clink_gemini_single_digit_sum():
-    if shutil.which("gemini") is None:
-        pytest.skip("gemini CLI is not installed or on PATH")
+    gemini_client = get_registry().get_client("gemini")
+    executable_name = gemini_client.executable[0]
+    if shutil.which(executable_name) is None:
+        pytest.skip(f"{executable_name} CLI is not installed or on PATH")
 
     if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
         pytest.skip("Gemini API key is not configured")
 
     tool = CLinkTool()
-    prompt = "Respond with a single digit equal to the sum of 2 + 2. Output only that digit."
+    expected_token = "AGY_CLINK_LIVE_4"
+    prompt = f"Include the exact token {expected_token} in your response."
 
     results = await tool.execute(
         {
@@ -35,9 +39,7 @@ async def test_clink_gemini_single_digit_sum():
     assert status in {"success", "continuation_available"}
 
     content = payload.get("content", "").strip()
-    # CLI may include additional metadata like <SUMMARY> tags; check first line or that "4" is present
-    first_line = content.split("\n")[0].strip()
-    assert first_line == "4" or "4" in content, f"Expected '4' in response, got: {content[:100]}"
+    assert expected_token in content, f"Expected {expected_token!r} in response, got: {content[:100]}"
 
     if status == "continuation_available":
         offer = payload.get("continuation_offer") or {}

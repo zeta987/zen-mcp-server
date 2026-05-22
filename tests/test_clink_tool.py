@@ -5,6 +5,7 @@ import pytest
 from clink import get_registry
 from clink.agents import AgentOutput
 from clink.parsers.base import ParsedCLIResponse
+from clink.registry import ClinkRegistry
 from tools.clink import MAX_RESPONSE_CHARS, CLinkTool
 
 
@@ -52,6 +53,46 @@ async def test_clink_tool_execute(monkeypatch):
     assert metadata.get("command") == ["gemini", "-o", "json"]
 
 
+@pytest.mark.asyncio
+async def test_clink_tool_returns_agy_plain_text_payload(monkeypatch):
+    tool = CLinkTool()
+
+    class DummyAgent:
+        async def run(self, **kwargs):
+            _ = kwargs
+            return AgentOutput(
+                parsed=ParsedCLIResponse(content="hi from agy", metadata={}),
+                sanitized_command=["agy", "--dangerously-skip-permissions", "--print"],
+                returncode=0,
+                stdout="hi from agy",
+                stderr="",
+                duration_seconds=0.25,
+                parser_name="plain_text",
+                output_file_content=None,
+            )
+
+    monkeypatch.setattr("tools.clink.create_agent", lambda client: DummyAgent())
+
+    results = await tool.execute(
+        {
+            "prompt": "echo hi",
+            "cli_name": "gemini",
+            "role": "default",
+            "absolute_file_paths": [],
+            "images": [],
+        }
+    )
+
+    payload = json.loads(results[0].text)
+    assert payload["status"] in {"success", "continuation_available"}
+    assert payload["content"] == "hi from agy"
+    metadata = payload["metadata"]
+    assert metadata["cli_name"] == "gemini"
+    assert metadata["parser"] == "plain_text"
+    assert metadata["return_code"] == 0
+    assert metadata["command"] == ["agy", "--dangerously-skip-permissions", "--print"]
+
+
 def test_registry_lists_roles():
     registry = get_registry()
     clients = registry.list_clients()
@@ -59,6 +100,13 @@ def test_registry_lists_roles():
     roles = registry.list_roles("gemini")
     assert "default" in roles
     assert "default" in registry.list_roles("codex")
+    gemini_client = registry.get_client("gemini")
+    assert gemini_client.executable[-1].endswith("agy")
+    assert gemini_client.internal_args == ["--print"]
+    assert gemini_client.config_args == ["--dangerously-skip-permissions"]
+    assert gemini_client.parser == "plain_text"
+    assert gemini_client.execution_mode == "conpty"
+    assert gemini_client.strip_ansi is True
     codex_client = registry.get_client("codex")
     # Verify codex uses --enable web_search_request (not --search which is unsupported by exec)
     assert codex_client.config_args == [
@@ -67,6 +115,35 @@ def test_registry_lists_roles():
         "--enable",
         "web_search_request",
     ]
+
+
+def test_registry_keeps_legacy_gemini_json_defaults(monkeypatch, tmp_path):
+    config_path = tmp_path / "gemini.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "name": "gemini",
+                "command": "gemini",
+                "roles": {
+                    "default": {
+                        "prompt_path": "systemprompts/clink/default.txt",
+                        "role_args": [],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLI_CLIENTS_CONFIG_PATH", str(config_path))
+
+    registry = ClinkRegistry()
+    gemini_client = registry.get_client("gemini")
+
+    assert gemini_client.executable == ["gemini"]
+    assert gemini_client.internal_args == ["-o", "json"]
+    assert gemini_client.parser == "gemini_json"
+    assert gemini_client.execution_mode == "pipe"
+    assert gemini_client.strip_ansi is False
 
 
 @pytest.mark.asyncio
