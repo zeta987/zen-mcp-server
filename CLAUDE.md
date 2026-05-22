@@ -2,6 +2,20 @@
 
 This file contains essential commands and workflows for developing and maintaining the PAL MCP Server when working with Claude. Use these instructions to efficiently run quality checks, manage the server, check logs, and run tests.
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context documentation layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Quick Reference Commands
 
 ### Code Quality Checks
